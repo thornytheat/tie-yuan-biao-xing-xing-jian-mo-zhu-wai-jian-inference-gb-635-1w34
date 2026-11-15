@@ -98,6 +98,62 @@ CREATE TABLE IF NOT EXISTS totals (
 CREATE TABLE IF NOT EXISTS manifests (
     batch_id TEXT PRIMARY KEY, json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reviews (
+    review_id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL,
+    declaration_digest TEXT NOT NULL DEFAULT '',
+    rule_version TEXT NOT NULL DEFAULT '',
+    basis_digest TEXT NOT NULL,
+    previous_publication_id TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    published_publication_id TEXT,
+    note TEXT NOT NULL DEFAULT ''
+);
+DROP INDEX IF EXISTS idx_reviews_batch;
+CREATE INDEX IF NOT EXISTS idx_reviews_declaration ON reviews(declaration_digest);
+CREATE TABLE IF NOT EXISTS review_items (
+    review_id TEXT NOT NULL, item_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+    kind TEXT NOT NULL, conflict_type TEXT NOT NULL DEFAULT 'agreement',
+    conflict_detail TEXT NOT NULL DEFAULT '', alternatives_json TEXT NOT NULL DEFAULT '[]',
+    child_table TEXT NOT NULL, child_columns_json TEXT NOT NULL DEFAULT '[]',
+    parent_table TEXT NOT NULL DEFAULT '', parent_columns_json TEXT NOT NULL DEFAULT '[]',
+    ddl_json TEXT NOT NULL DEFAULT 'null', sample_json TEXT NOT NULL DEFAULT 'null',
+    declared_sample_json TEXT NOT NULL DEFAULT 'null',
+    allowed_json TEXT NOT NULL DEFAULT '[]',
+    signature TEXT NOT NULL DEFAULT '',
+    decision TEXT NOT NULL DEFAULT 'pending', decision_note TEXT NOT NULL DEFAULT '',
+    decided_at TEXT,
+    PRIMARY KEY (review_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS publications (
+    publication_id TEXT PRIMARY KEY,
+    review_id TEXT NOT NULL,
+    version_no INTEGER NOT NULL,
+    package_digest TEXT NOT NULL,
+    basis_digest TEXT NOT NULL,
+    previous_publication_id TEXT,
+    status TEXT NOT NULL DEFAULT 'published',
+    created_at TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_package
+    ON publications(review_id, package_digest);
+CREATE INDEX IF NOT EXISTS idx_publications_review
+    ON publications(review_id, version_no);
+CREATE TABLE IF NOT EXISTS publication_items (
+    publication_id TEXT NOT NULL, item_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+    kind TEXT NOT NULL, child_table TEXT NOT NULL,
+    child_columns_json TEXT NOT NULL DEFAULT '[]',
+    parent_table TEXT NOT NULL DEFAULT '',
+    parent_columns_json TEXT NOT NULL DEFAULT '[]',
+    decision TEXT NOT NULL, conflict_type TEXT NOT NULL DEFAULT 'agreement',
+    basis_json TEXT NOT NULL DEFAULT '{}',
+    published INTEGER NOT NULL DEFAULT 0, published_status TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (publication_id, item_id)
+);
 """
 
 
@@ -387,6 +443,228 @@ class Store:
     def _all(self, sql: str, args: tuple) -> list[dict]:
         with self.connect() as conn:
             return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+    # ---------- 契约裁定与发布 ----------
+    def get_review(self, review_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM reviews WHERE review_id=?",
+                               (review_id,)).fetchone()
+        return dict(row) if row else None
+
+    def find_review_by_declaration(self, declaration_digest: str,
+                                   rule_version: str) -> dict | None:
+        """裁定归属声明契约：同一份 DDL + 同一规则版本共用一个裁定包版本链。"""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM reviews WHERE declaration_digest=? AND rule_version=? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (declaration_digest, rule_version)).fetchone()
+        return dict(row) if row else None
+
+    def list_reviews(self, limit: int = 30) -> list[dict]:
+        return self._all("SELECT * FROM reviews ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                         (limit,))
+
+    def save_review(self, review: dict) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO reviews (review_id, batch_id, declaration_digest,
+                        rule_version, basis_digest, previous_publication_id, status,
+                        created_at, updated_at, published_publication_id, note)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(review_id) DO UPDATE SET
+                     declaration_digest=excluded.declaration_digest,
+                     rule_version=excluded.rule_version,
+                     basis_digest=excluded.basis_digest,
+                     previous_publication_id=excluded.previous_publication_id,
+                     status=excluded.status, updated_at=excluded.updated_at,
+                     published_publication_id=excluded.published_publication_id,
+                     note=excluded.note""",
+                (review["review_id"], review["batch_id"],
+                 review.get("declaration_digest", ""), review.get("rule_version", ""),
+                 review["basis_digest"], review.get("previous_publication_id"),
+                 review["status"], review["created_at"], review["updated_at"],
+                 review.get("published_publication_id"), review.get("note", "")))
+
+    def replace_review_items(self, review_id: str, items: list[dict], *,
+                             preserve_decisions: bool = True) -> None:
+        """重建裁定项：同一 review 先删后插，单事务。
+
+        preserve_decisions=True 时按 item_id 沿用原裁定（同一依据重入、中断续跑）；
+        但只在「该条的两侧依据与冲突形态逐字未变」（signature 相同）时沿用，
+        依据漂移的条目回到未裁，避免旧裁定静默套在新证据上。
+        """
+        with self.connect() as conn:
+            keep = {}
+            if preserve_decisions:
+                keep = {
+                    row["item_id"]: dict(row) for row in conn.execute(
+                        "SELECT item_id, decision, decision_note, decided_at, signature "
+                        "FROM review_items WHERE review_id=?", (review_id,)).fetchall()
+                }
+            conn.execute("DELETE FROM review_items WHERE review_id=?", (review_id,))
+            for item in items:
+                prior = keep.get(item["item_id"], {})
+                if (preserve_decisions and prior
+                        and prior.get("signature") != item.get("signature", "")):
+                    prior = {}
+                decision = item.get("decision") or prior.get("decision") or "pending"
+                allowed = list(item.get("allowed", []))
+                if decision != "pending" and decision not in allowed:
+                    decision, prior = "pending", {}
+                conn.execute(
+                    """INSERT INTO review_items (review_id, item_id, ordinal, kind,
+                        conflict_type, conflict_detail, alternatives_json, child_table,
+                        child_columns_json, parent_table, parent_columns_json,
+                        ddl_json, sample_json, declared_sample_json, allowed_json,
+                        signature, decision, decision_note, decided_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (review_id, item["item_id"], item["ordinal"], item["kind"],
+                     item.get("conflict_type", "agreement"),
+                     item.get("conflict_detail", ""),
+                     json.dumps(item.get("alternatives", []), ensure_ascii=False),
+                     item["child_table"],
+                     json.dumps(item.get("child_columns", []), ensure_ascii=False),
+                     item.get("parent_table") or "",
+                     json.dumps(item.get("parent_columns", []), ensure_ascii=False),
+                     json.dumps(item.get("ddl"), ensure_ascii=False),
+                     json.dumps(item.get("sample"), ensure_ascii=False),
+                     json.dumps(item.get("declared_sample"), ensure_ascii=False),
+                     json.dumps(allowed, ensure_ascii=False),
+                     item.get("signature", ""),
+                     decision, prior.get("decision_note", ""),
+                     prior.get("decided_at")))
+
+    def load_review_items(self, review_id: str) -> list[dict]:
+        rows = self._all(
+            "SELECT * FROM review_items WHERE review_id=? ORDER BY ordinal, item_id",
+            (review_id,))
+        for row in rows:
+            row["child_columns"] = json.loads(row.pop("child_columns_json") or "[]")
+            row["parent_columns"] = json.loads(row.pop("parent_columns_json") or "[]")
+            row["alternatives"] = json.loads(row.pop("alternatives_json") or "[]")
+            row["allowed"] = json.loads(row.pop("allowed_json") or "[]")
+            row["ddl"] = json.loads(row.pop("ddl_json") or "null")
+            row["sample"] = json.loads(row.pop("sample_json") or "null")
+            row["declared_sample"] = json.loads(
+                row.pop("declared_sample_json") or "null")
+        return rows
+
+    def decide_review_item(self, review_id: str, item_id: str, *, decision: str,
+                           note: str, decided_at: str) -> bool:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "UPDATE review_items SET decision=?, decision_note=?, decided_at=? "
+                "WHERE review_id=? AND item_id=?",
+                (decision, note, decided_at, review_id, item_id))
+        return cursor.rowcount > 0
+
+    def touch_review(self, review_id: str, *, status: str, updated_at: str,
+                     note: str | None = None,
+                     published_publication_id: str | None = None) -> None:
+        with self.connect() as conn:
+            if published_publication_id is None:
+                conn.execute(
+                    "UPDATE reviews SET status=?, updated_at=?, note=COALESCE(?, note) "
+                    "WHERE review_id=?", (status, updated_at, note, review_id))
+            else:
+                conn.execute(
+                    "UPDATE reviews SET status=?, updated_at=?, note=COALESCE(?, note), "
+                    "published_publication_id=? WHERE review_id=?",
+                    (status, updated_at, note, published_publication_id, review_id))
+
+    # ---------- 发布版本 ----------
+    def get_publication(self, publication_id: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM publications WHERE publication_id=?",
+                               (publication_id,)).fetchone()
+        return dict(row) if row else None
+
+    def find_publication_by_package(self, review_id: str,
+                                    package_digest: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM publications WHERE review_id=? AND package_digest=?",
+                (review_id, package_digest)).fetchone()
+        return dict(row) if row else None
+
+    def latest_publication(self, review_id: str | None = None) -> dict | None:
+        with self.connect() as conn:
+            if review_id:
+                row = conn.execute(
+                    "SELECT * FROM publications WHERE review_id=? AND status='published' "
+                    "ORDER BY version_no DESC, rowid DESC LIMIT 1",
+                    (review_id,)).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM publications WHERE status='published' "
+                    "ORDER BY created_at DESC, rowid DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+    def list_publications(self, review_id: str | None = None,
+                          limit: int = 30) -> list[dict]:
+        if review_id:
+            return self._all(
+                "SELECT * FROM publications WHERE review_id=? "
+                "ORDER BY version_no DESC, rowid DESC LIMIT ?", (review_id, limit))
+        return self._all(
+            "SELECT * FROM publications ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (limit,))
+
+    def save_publication(self, publication: dict, items: list[dict],
+                         review_update: dict | None = None) -> None:
+        """整版发布：同一事务写版本头、每条裁定快照与裁定包状态。
+
+        任何一步异常都整体回滚：不会出现「版本头写了但条目没写」的半版，
+        旧版本与其条目原样保留，`latest_publication` 仍指向旧版本。
+        """
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO publications (publication_id, review_id, version_no,
+                        package_digest, basis_digest, previous_publication_id, status,
+                        created_at, snapshot_json, note)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (publication["publication_id"], publication["review_id"],
+                 publication["version_no"], publication["package_digest"],
+                 publication["basis_digest"], publication.get("previous_publication_id"),
+                 publication.get("status", "published"), publication["created_at"],
+                 json.dumps(publication["snapshot"], ensure_ascii=False),
+                 publication.get("note", "")))
+            for item in items:
+                conn.execute(
+                    """INSERT INTO publication_items (publication_id, item_id, ordinal,
+                        kind, child_table, child_columns_json, parent_table,
+                        parent_columns_json, decision, conflict_type, basis_json,
+                        published, published_status)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (publication["publication_id"], item["item_id"], item["ordinal"],
+                     item["kind"], item["child_table"],
+                     json.dumps(item.get("child_columns", []), ensure_ascii=False),
+                     item.get("parent_table") or "",
+                     json.dumps(item.get("parent_columns", []), ensure_ascii=False),
+                     item["decision"], item.get("conflict_type", "agreement"),
+                     json.dumps(item.get("basis", {}), ensure_ascii=False),
+                     1 if item.get("published") else 0,
+                     item.get("published_status", "")))
+            if review_update:
+                conn.execute(
+                    "UPDATE reviews SET status=?, updated_at=?, note=COALESCE(?, note), "
+                    "published_publication_id=? WHERE review_id=?",
+                    (review_update["status"], review_update["updated_at"],
+                     review_update.get("note"),
+                     review_update["published_publication_id"],
+                     review_update["review_id"]))
+
+    def load_publication_items(self, publication_id: str) -> list[dict]:
+        rows = self._all(
+            "SELECT * FROM publication_items WHERE publication_id=? "
+            "ORDER BY ordinal, item_id", (publication_id,))
+        for row in rows:
+            row["child_columns"] = json.loads(row.pop("child_columns_json") or "[]")
+            row["parent_columns"] = json.loads(row.pop("parent_columns_json") or "[]")
+            row["basis"] = json.loads(row.pop("basis_json") or "{}")
+            row["published"] = bool(row["published"])
+        return rows
 
 
 def _dec(text: str) -> Decimal:

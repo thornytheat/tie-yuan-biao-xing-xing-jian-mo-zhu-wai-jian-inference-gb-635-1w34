@@ -25,6 +25,7 @@
 | M5 版本与重跑 | 批次历史、批次详情、续跑 | `GET /api/batches` `POST /api/batches/{id}/resume` |
 | M6 规格单导出 | 规格单、列规格 CSV、证据 CSV、清单 JSON | `GET /api/spec` |
 | M7 建模影响评估 | 变更影响面、迁移顺序、回滚提示、单条变更试算 | `GET /api/impact` `POST /api/impact/propose` |
+| M8 契约裁定与发布 | 两套依据并列、冲突标记、逐条裁定、整版发布、裁定包重放 | `GET /api/review` `POST /api/review/{id}/decide` `POST /api/review/{id}/publish` `GET /api/publications` |
 
 ## 核心规则
 
@@ -36,6 +37,10 @@
 6. 影响级别 = 引用方式 × 优先级 × 变更破坏性：P1 精确引用加破坏性变更判中断，整表引用一律核对。
 7. 唯一性先定空值规则：含空值的键免检（与 UNIQUE 一致）或全算，两者结论相反就阻断。
 8. 迁移顺序按依赖拓扑排：清洗 → 类型 → 改名 → 键 → 引用；成环整组阻断。
+9. 关系候选保留两套依据：DDL 声明是建表契约，样本包含度只是采样证据；两者冲突时
+   标 `declared_only` / `sample_only` / `mismatch`，逐条裁定后才整版发布。
+10. 裁定只决定是否进建模草稿，不删除任何一侧依据；整版发布失败保留旧版，
+    裁定包重跑沿用原发布版本，不新增结论。
 
 数字化定义与字段含义见 `docs/DATA-DICTIONARY.md`，陷阱与测试映射见 `docs/DEPTH.md`。
 
@@ -71,13 +76,14 @@ pytest -q
 | `/keys` | 键推断 |
 | `/star` | 星型建议 |
 | `/batches` | 版本历史 |
+| `/review` | 契约裁定与发布 |
 | `/impact` | 影响评估 |
 | `/spec` | 规格单（可打印） |
 
 ## 目录
 
 ```text
-app/                 main/config/errors/reasons/manifest/store/web + 七个功能模块
+app/                 main/config/errors/reasons/manifest/store/web + 八个功能模块
 app/templates/       base + 7 页
 app/static/          theme/layout/components/print.css + 4 个 js
 docs/                DEPTH.md  DATA-DICTIONARY.md

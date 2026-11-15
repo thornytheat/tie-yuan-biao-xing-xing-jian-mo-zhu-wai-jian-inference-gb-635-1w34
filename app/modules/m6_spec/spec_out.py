@@ -46,6 +46,7 @@ def key_rows(keys: list) -> list:
             "child_columns": item["child_columns"],
             "child_text": "、".join(item["child_columns"]) or "—",
             "parent_table": item["parent_table"] or "—",
+            "parent_columns": list(item.get("parent_columns") or []),
             "parent_text": "、".join(item["parent_columns"]) or "—",
             "declared": "DDL" if item["declared"] else "推断",
             "status": item["status"],

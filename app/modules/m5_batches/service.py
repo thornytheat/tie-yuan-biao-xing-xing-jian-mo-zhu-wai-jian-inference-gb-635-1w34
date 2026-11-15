@@ -44,6 +44,9 @@ def run(*, settings, store, source: str = "sample", params: dict | None = None,
 
     batch = state.new_batch(batch_key_value=batch_key_value, input_digest=input_digest,
                             source=source, params=params)
+    if store.get_batch(batch["batch_id"]) is not None:
+        # 同一秒内出现第二份不同输入：补尾，绝不复用别人的批次号覆盖旧结果
+        batch["batch_id"] = state.disambiguate(batch["batch_id"])
     store.upsert_batch(batch)
 
     try:

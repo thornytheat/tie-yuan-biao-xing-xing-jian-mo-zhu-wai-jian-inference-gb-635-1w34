@@ -31,6 +31,7 @@ STAGE_LABELS = {
     "keys": "键推断",
     "spec": "规格单",
     "impact": "影响评估",
+    "review": "契约裁定",
 }
 
 # 编码回退链：gb18030 是 gbk/gb2312 的超集，放在最后兜底
@@ -98,6 +99,19 @@ DESCRIPTIVE_KINDS = ("text", "code", "date", "timestamp", "bool")
 # 事实表 / 维度表 / 待定
 ROLE_LABELS = {"fact": "事实表", "dim": "维度表", "pending": "待定"}
 SCD_LABELS = {"SCD0": "SCD0 静态", "SCD1": "SCD1 覆盖", "SCD2": "SCD2 版本"}
+
+# 契约裁定：一条关系候选的两种依据与逐条裁定
+REVIEW_DECISIONS = ("accept", "reject", "defer")
+REVIEW_DECISION_LABELS = {"accept": "采纳", "reject": "驳回", "defer": "挂起",
+                          "pending": "未裁定"}
+REVIEW_STATUS_LABELS = {"open": "待裁定", "complete": "已裁定", "published": "已发布"}
+# 冲突类型：声明 vs 样本两侧对不上时的四类形态
+REVIEW_CONFLICT_LABELS = {
+    "agreement": "两侧一致",
+    "declared_only": "声明独有",
+    "sample_only": "样本独有",
+    "mismatch": "同列异父",
+}
 
 
 @dataclass(frozen=True)

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 
 from ... import config, manifest
 
@@ -25,6 +26,11 @@ def new_batch(*, batch_key_value: str, input_digest: str, source: str,
         "params": dict(params),
         "note": "",
     }
+
+
+def disambiguate(batch_id: str) -> str:
+    """批次号撞车时补 4 位尾：同一秒内两份不同输入不能互相覆盖结果。"""
+    return f"{batch_id}-{uuid.uuid4().hex[:4]}"
 
 
 def stage_row(stage: str, *, in_count: int = 0, out_count: int = 0,

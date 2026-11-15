@@ -223,6 +223,55 @@ REASONS = {
     "M_BAD_CHANGE": _r(
         "M_BAD_CHANGE", ERROR, "impact",
         "提交的变更不合法", "按变更类型与表列名重新提交"),
+    # ---- M8 契约裁定与发布 ----
+    "R_DECLARED_ONLY": _r(
+        "R_DECLARED_ONLY", WARN, "review",
+        "DDL 声明的关系在样本里找不到支撑", "样本可能没采到，也可能父表缺值；不得直接抹掉声明"),
+    "R_SAMPLE_ONLY": _r(
+        "R_SAMPLE_ONLY", WARN, "review",
+        "样本证实的同名列关系 DDL 里没声明", "确认后进建模草稿，下次接入补进 DDL"),
+    "R_MISMATCH": _r(
+        "R_MISMATCH", ERROR, "review",
+        "同名列在声明与样本中指到了不同的父表", "两条依据都保留，逐条裁定，不可静默取一方"),
+    "R_AGREEMENT": _r(
+        "R_AGREEMENT", INFO, "review",
+        "声明与样本对同一条关系的结论一致", "两侧依据仍然各存一份，供复核"),
+    "R_PENDING": _r(
+        "R_PENDING", WARN, "review",
+        "仍有未裁定的冲突项", "逐条裁定后才能整版发布"),
+    "R_DEFERRED": _r(
+        "R_DEFERRED", WARN, "review",
+        "该项被挂起，本轮不带入建模草稿", "挂起不等于抹掉，依据仍留在裁定包里"),
+    "R_REJECTED": _r(
+        "R_REJECTED", INFO, "review",
+        "裁定驳回，本轮不进入建模草稿", "驳回理由写入裁定注记，可回看"),
+    "R_ACCEPTED": _r(
+        "R_ACCEPTED", INFO, "review",
+        "裁定采纳，进入已发布建模草稿", "发布版本内可复核依据与裁定"),
+    "R_STALE_BASIS": _r(
+        "R_STALE_BASIS", ERROR, "review",
+        "裁定包的输入依据与当前样本不一致", "旧裁定不能套在新样本上，重新开包或恢复原输入"),
+    "R_UNKNOWN_ITEM": _r(
+        "R_UNKNOWN_ITEM", ERROR, "review",
+        "裁定包里出现本轮不存在的裁定项", "按裁定项的 item_id 重新提交"),
+    "R_BAD_DECISION": _r(
+        "R_BAD_DECISION", ERROR, "review",
+        "裁定取值不在 accept / reject / defer 之内", "按三档裁定重新提交"),
+    "R_NOT_READY": _r(
+        "R_NOT_READY", ERROR, "review",
+        "还没逐条裁定完就请求发布", "先裁定所有待定项，再整版发布"),
+    "R_PUBLISH_FAILED": _r(
+        "R_PUBLISH_FAILED", ERROR, "review",
+        "整版发布失败，旧版本保持不变", "修好失败原因后重发；旧版仍可读"),
+    "R_PUBLISHED": _r(
+        "R_PUBLISHED", INFO, "review",
+        "整版发布完成，版本号递增", "发布版本不可改，只能发新版本"),
+    "R_REPLAYED": _r(
+        "R_REPLAYED", INFO, "review",
+        "裁定包与已发布版本逐字相同，直接复用", "重放不新增版本、不新增结论"),
+    "R_NO_BASIS": _r(
+        "R_NO_BASIS", WARN, "review",
+        "本轮既没有声明关系也没有样本关系", "先确认 DDL 与样本是否都接进来了"),
 }
 
 

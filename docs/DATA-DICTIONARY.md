@@ -156,3 +156,60 @@
 - 前置被阻断时本条也阻断，记 `M_MIGRATION_BLOCKED`；变更账 = 可执行 + 阻断。
 - 回滚按迁移逆序执行，只列可执行变更；删行、孤儿值清洗、类型收窄不可原地回滚，
   记 `M_ROLLBACK_IRREVERSIBLE`，迁移前必须先建备份表。
+
+## 10 契约裁定与发布
+
+关系候选把「DDL 声明」与「样本证实」两套依据并列保存，裁定只决定是否进入建模草稿，
+任何一侧依据都不因裁定而删除。声明契约在发布版本里永久保留，样本证实的新关系要先
+被采纳才进草稿，采样噪声因此进不了规格单。
+
+### 10.1 关系候选
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `item_id` | TEXT | `rel|子表|子列|父表|父列`，全小写，两侧依据共用同一 id |
+| `child_table` / `child_columns` | TEXT / TEXT[] | 子表与子列，列名按 DDL 原样 |
+| `parent_table` / `parent_columns` | TEXT / TEXT[] | 父表与父列 |
+| `conflict_type` | TEXT | `agreement` / `declared_only` / `sample_only` / `mismatch` |
+| `conflict_detail` | TEXT | 一句话说明冲突在哪，含两侧包含度与「另见」父键 |
+| `alternatives` | TEXT[] | 同子列出现过的其他父键，形如 `父表.列` |
+| `ddl` | OBJECT / null | 声明依据快照：`status`、`inclusion`、`cardinality_ratio`、`reason_code`、`note`、`evidence` |
+| `sample` | OBJECT / null | 样本依据快照：同上，另记 `matched` / `child_distinct` / `parent_distinct` |
+| `declared_sample` | OBJECT / null | 声明项在样本里的实况：`present`、`values`、`distinct`、`note` |
+| `decision` | TEXT | `pending` / `accept` / `reject` / `defer` |
+| `decision_note` | TEXT | 裁定注记，驳回时必须写理由 |
+| `decided_at` | TIMESTAMP | 最后一次裁定时间，UTC |
+
+四种冲突形态：
+
+| 形态 | 判定 | 处理 |
+|---|---|---|
+| `agreement` | 声明关系在样本里包含度 ≥ 0.95 | 两侧快照都留，通常可直接采纳 |
+| `declared_only` | 只有 DDL 声明；样本没这一列、父表无样本或包含度不足 | 声明依据不得抹掉，需人工裁定 |
+| `sample_only` | 同名列样本包含度 ≥ 0.95 + 父列单列主键 + 基数比 ∈ [0.02, 0.95]，DDL 未声明 | 采纳后才进建模草稿，否则可能把采样噪声写进规格 |
+| `mismatch` | 同一子列两侧指向不同父键 | 整组阻断到逐条裁定，`alternatives` 列出另一父键 |
+
+### 10.2 裁定包与发布版本
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `review_id` | TEXT | `RV-` + sha256(DDL 声明摘要 + 规则版本) 前 16 位；同一 DDL 共用一个版本链 |
+| `basis_digest` | TEXT | sha256(批次 + DDL 摘要 + 输入摘要 + 规则版本 + 各条依据签名) |
+| `package_digest` | TEXT | sha256(依据摘要 + 按 `item_id` 排序的裁定与注记)，与提交顺序无关 |
+| `publication_id` | TEXT | `PUB-YYYYmmddHHMMSS-xxxx` |
+| `version_no` | INT | 同一 `review_id` 内从 1 递增；重放不新增 |
+| `previous_publication_id` | TEXT | 上一版 id，首版为 null |
+| `declared_contract` | OBJECT[] | 全部 DDL 声明关系（含驳回、挂起、样本不支撑），永久留档 |
+| `draft` | OBJECT[] | 裁定为采纳的关系，声明关系与样本新关系都可能在这里 |
+| `rejected` / `deferred` | OBJECT[] | 驳回与挂起的关系，附裁定注记 |
+| `balanced` | BOOL | 候选数 = 采纳 + 驳回 + 挂起，且无未裁项 |
+
+发布不变量：
+
+- 未裁定项 > 0 时整版发布被阻断，`R_NOT_READY`；不使用「部分发布」。
+- 同一 `package_digest` 已存在时直接返回该版本，`replayed=true`，不新增版本、
+  不改当前裁定、不重算依据。
+- 发布失败整体回滚，`latest_publication` 仍指向旧版本，裁定包留 `发布失败：...`。
+- 依据漂移（换了样本）后提交旧 `basis_digest` 的裁定包给 `R_STALE_BASIS`；
+  同一 DDL 的新样本只在原版本链上刷新依据快照，逐条按 `item_id` 沿用未变的裁定。
+- 永久保留声明契约：驳回一条声明关系只把它挡在建模草稿外，声明契约区块仍列全部声明。

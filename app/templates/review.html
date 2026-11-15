@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block head_meta %}候选 {{ payload['items'] | length if payload else 0 }} · 未裁 {{ payload.decisions.pending if payload else 0 }}{% endblock %}
+
+{% block main %}
+{% if payload %}
+<div data-review-id="{{ review.review_id }}" data-basis-digest="{{ review.basis_digest }}" hidden></div>
+<section class="section">
+  <h2>总览</h2>
+  <div class="totalbar">
+    <span>关系候选 <b>{{ payload['items'] | length }}</b></span>
+    <span>同列异父 <b>{{ payload.conflicts.mismatch }}</b></span>
+    <span>声明独有 <b>{{ payload.conflicts.declared_only }}</b></span>
+    <span>样本独有 <b>{{ payload.conflicts.sample_only }}</b></span>
+    <span>两侧一致 <b>{{ payload.conflicts.agreement }}</b></span>
+    <span>未裁定 <b>{{ payload.decisions.pending }}</b></span>
+    <span>当前版本 <b>{{ 'v' ~ payload.latest_publication.version_no if payload.latest_publication else '—' }}</b></span>
+  </div>
+  <p class="hint">两套依据并列保留：DDL 声明是建表契约，样本包含度只是采样证据。裁定只决定是否进入建模草稿，不删除任何一侧依据；逐条裁定完才能整版发布。</p>
+</section>
+
+<section class="section">
+  <h2>关系候选</h2>
+  <div class="wide">
+    <table class="spec" data-sortable>
+      <caption>声明依据（DDL）与样本依据（包含度）各一列，冲突形态单独标出</caption>
+      <thead>
+        <tr>
+          <th class="num">序</th><th>形态</th><th>子表</th><th>子列</th>
+          <th>父表</th><th>父列</th>
+          <th>声明依据</th><th>样本依据</th><th>说明</th><th>裁定</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in payload['items'] %}
+        <tr data-item="{{ item.item_id }}">
+          <td class="num">{{ item.ordinal }}</td>
+          <td>
+            <span class="flag" data-tone="{{ 'bad' if item.conflict_type == 'mismatch' else ('warn' if item.conflict_type in ('declared_only', 'sample_only') else 'ok') }}">{{ item.conflict_label }}</span>
+          </td>
+          <td class="mono">{{ item.child_table }}</td>
+          <td class="mono">{{ item.child_columns | join('、') }}</td>
+          <td class="mono">{{ item.parent_table or '—' }}</td>
+          <td class="mono">{{ item.parent_columns | join('、') or '—' }}</td>
+          <td class="mono">
+            {% if item.ddl %}
+              {{ item.ddl.status_label }} · 包含度 {{ item.ddl.inclusion or '—' }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="mono">
+            {% if item.sample %}
+              {{ item.sample.status_label }} · 包含度 {{ item.sample.inclusion or '—' }} · 基数比 {{ item.sample.cardinality_ratio or '—' }}
+            {% else %}—{% endif %}
+          </td>
+          <td>{{ item.conflict_detail }}</td>
+          <td>
+            <span class="flag" data-tone="{{ 'ok' if item.decision == 'accept' else ('bad' if item.decision == 'reject' else ('warn' if item.decision == 'defer' else '')) }}">{{ item.decision_label }}</span>
+          </td>
+          <td class="nowrap">
+            <button type="button" class="tiny" data-decide="accept" data-item-id="{{ item.item_id }}">采纳</button>
+            <button type="button" class="tiny" data-decide="reject" data-item-id="{{ item.item_id }}">驳回</button>
+            <button type="button" class="tiny" data-decide="defer" data-item-id="{{ item.item_id }}">挂起</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="11" class="empty">本轮没有关系候选。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="toolbar">
+    <button type="button" data-action="accept-all">全部采纳两侧一致项</button>
+    <button type="button" data-action="publish">整版发布</button>
+    <button type="button" data-action="resume">续跑未裁项</button>
+  </div>
+  {% if payload.published %}
+  <p class="hint">当前裁定与 v{{ payload.latest_publication.version_no }} 一致。改动任一裁定后再次发布会生成新版本，旧版本逐字不变。</p>
+  {% elif payload.latest_publication %}
+  <p class="hint">当前裁定相对 v{{ payload.latest_publication.version_no }} 有改动，尚未发布。发布后生成 v{{ payload.latest_publication.version_no + 1 }}，v{{ payload.latest_publication.version_no }} 原样保留。</p>
+  {% endif %}
+  <p class="notice" data-notice hidden></p>
+  <p class="hint" data-result hidden></p>
+</section>
+
+<section class="section">
+  <h2>当前发布版本</h2>
+  {% if payload.latest_publication %}
+  <dl class="pairs">
+    <div><dt>版本</dt><dd>v{{ payload.latest_publication.version_no }}</dd></div>
+    <div><dt>版本号</dt><dd class="mono">{{ payload.latest_publication.publication_id }}</dd></div>
+    <div><dt>裁定包摘要</dt><dd class="mono">{{ payload.latest_publication.package_digest[:16] }}</dd></div>
+    <div><dt>依据摘要</dt><dd class="mono">{{ payload.latest_publication.basis_digest[:16] }}</dd></div>
+    <div><dt>声明契约</dt><dd>{{ payload.latest_publication.counts.declared_contract }} 条</dd></div>
+    <div><dt>建模草稿</dt><dd>{{ payload.latest_publication.counts.draft }} 条</dd></div>
+    <div><dt>驳回 / 挂起</dt><dd>{{ payload.latest_publication.counts.rejected }} / {{ payload.latest_publication.counts.deferred }}</dd></div>
+    <div><dt>发布</dt><dd>{{ payload.latest_publication.created_at | ts }}</dd></div>
+  </dl>
+  <div class="toolbar">
+    <a href="/api/publications/{{ payload.latest_publication.publication_id }}">发布版本 JSON</a>
+    <a href="/api/publications/{{ payload.latest_publication.publication_id }}/export.csv">声明契约与草稿 CSV</a>
+  </div>
+  {% else %}
+  <p class="empty">还没有发布版本；逐条裁定完所有候选后整版发布。</p>
+  {% endif %}
+</section>
+
+<section class="section">
+  <h2>注</h2>
+  <ol class="footnotes">
+    {% for note in payload.notes %}
+    <li class="fn-item">{{ note }}</li>
+    {% endfor %}
+  </ol>
+</section>
+{% else %}
+<p class="empty">还没有批次。</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/review.js"></script>
+{% endblock %}

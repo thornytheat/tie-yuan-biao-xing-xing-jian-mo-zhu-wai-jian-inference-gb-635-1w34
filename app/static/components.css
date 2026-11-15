@@ -299,3 +299,17 @@ dl.pairs dd {
     animation: none !important;
   }
 }
+
+/* 裁定行内按钮：比主按钮小一号，三个并排不挤压表格 */
+button.tiny {
+  font-size: var(--fs-note);
+  padding: 0.12rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--line-strong);
+}
+
+button.tiny:hover {
+  background: var(--accent-wash);
+}

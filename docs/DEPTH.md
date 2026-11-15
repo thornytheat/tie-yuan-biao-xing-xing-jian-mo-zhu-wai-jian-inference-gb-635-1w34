@@ -1,6 +1,6 @@
 # 深度登记 starmodel
 
-- 规模：中型（7 个功能模块，81 个文件，83 条测试）
+- 规模：中型（8 个功能模块，90 个文件，100 条测试）
 - 核心规则：候选主键 = 唯一率 1 且无空值；外键 = 包含度 ≥ 0.95 且父列是单列主键（推断边另加基数比区间）；星型按「含度量 + 外键数」定事实或维度，维度按可变更列占比定 SCD；影响评估按「引用方式 × 优先级 × 变更破坏性」定中断或核对，迁移顺序取依赖拓扑序。
 - 使用者与工作流：禾丰零售数仓组（7 人）导入贴源层 DDL + 样本 CSV + 编码导出件 → 逐列剖析 → 主键外键推断 → 星型建议 → 打印规格单 → 变更前评估下游影响与迁移顺序。
 
@@ -15,8 +15,14 @@
 | M5 版本与重跑 | 查历史、续跑、幂等重跑 | GET /api/batches | `app/modules/m5_batches/state.py` `app/modules/m5_batches/resume.py` `app/modules/m5_batches/service.py` | `tests/test_batches.py` |
 | M6 规格单导出 | 打印规格单，导出列规格与证据 | GET /api/spec | `app/modules/m6_spec/spec_out.py` `app/modules/m6_spec/csv_out.py` `app/modules/m6_spec/json_out.py` | `tests/test_spec.py` |
 | M7 建模影响评估 | 看变更影响面、迁移顺序与回滚提示，提交一条变更试算 | GET /api/impact · POST /api/impact/propose · GET /impact | `app/modules/m7_impact/impact.py` `app/modules/m7_impact/topology.py` `app/modules/m7_impact/rollback.py` | `tests/test_m7_impact.py` |
+| M8 契约裁定与发布 | 对照两套依据、逐条裁定关系候选、整版发布、重放裁定包 | GET /api/review · POST /api/review/{id}/decide · POST /api/review/{id}/publish · GET /review | `app/modules/m8_review/candidates.py` `app/modules/m8_review/service.py` `app/modules/m8_review/export.py` | `tests/test_review.py` |
 
 端到端：`tests/test_e2e.py`（6 条，脏样例一路走到规格单导出，并覆盖七个页面渲染）。
+
+M8 不进批次流水线：裁定包按「DDL 声明摘要 + 规则版本」归属，样本换一批只刷新依据快照、
+按 item_id 与逐条依据签名沿用未变的裁定，不新建版本链、不写批次行；已发布版本不可变。
+M6 规格单只读当前发布版本，把声明契约与建模草稿并排列出，不改任何既有计数。发布版本是一个事务里的版本头 + 全部裁定条目 + 裁定包状态，
+失败整体回滚，`latest_publication` 仍指向旧版。
 
 ## 陷阱登记
 
@@ -34,6 +40,8 @@
 | TRAP-22 | 渠道写 `APP`/`app`/`App`/`APP端` | 合并顺序不同结果不同 | 等价类 + 固定代表元，与行序无关 | `app/modules/m2_contract/coerce.py:125` | `tests/test_keys.py::test_trap22_alias_merge_is_order_independent` |
 | TRAP-27 | 组合键某一列为空（如门店+会员号），空值是否参与唯一性没定 | 按 `len(set(元组)) == len(元组)` 判：含空值的键免检时判唯一，全算时判不唯一，改约束的依据随机翻转；有效行 0 时该式还返回真 | 两种空值规则各算一遍，结论相反就阻断，等人工定规则；有效行 0 单独判不可判 | `app/modules/m7_impact/impact.py:194` | `tests/test_m7_impact.py::test_trap27_partial_null_key_blocks_unique_change` |
 | TRAP-28 | `store_code` 与 `Store_Code` 仅大小写不同，被当成同一列 | 折叠后去重数变小，得出「合并后仍唯一」的伪唯一结论，据此直接改名并删除旧列 | 按大小写敏感当作两列；折叠结果只用于提示伪唯一，改名列整条阻断 | `app/modules/m7_impact/impact.py:227` | `tests/test_m7_impact.py::test_trap28_case_pseudo_unique_blocks_column_merge` |
+| TRAP-29 | DDL 声明 store→region，新样本里 region `09` 找不到，同时另一组同名 `region_code` 在样本里完全包含 | 按样本重算就抹掉声明边，或按声明就无视采样噪声，两种都让评审分不清契约变化与噪声 | 两套依据各自快照，标 `declared_only` / `sample_only` / `mismatch`；逐条裁定后才进建模草稿，声明契约永久保留 | `app/modules/m8_review/candidates.py:118` | `tests/test_review.py::test_declared_only_relation_kept_even_when_sample_disagrees` |
+| TRAP-30 | 逐条裁定做到一半进程挂了，或同一裁定包被重跑两次 | 半截裁定被当完整包发布，或重跑又发一版，版本号乱涨 | 裁定逐条落库；未裁完发布给 `R_NOT_READY`；裁定包摘要命中已有版本直接复用，不新增版本 | `app/modules/m8_review/service.py:338` | `tests/test_review.py::test_replaying_same_package_returns_same_version` |
 
 ## 对账规则
 
@@ -43,6 +51,8 @@
 - 对象账：贴源表数 = 事实 + 维度 + 待定
 - 金额合计：只统计事实表里的 decimal 度量，Decimal 两位小数
 - 变更账：变更条数 = 可执行 + 阻断；迁移顺序条数 = 可执行；回滚条数 = 可执行，且顺序与之相反
+- 发布账：关系候选数 = 采纳 + 驳回 + 挂起（不得有未裁）；声明契约条数 ≤ 候选数，
+  采纳项全部进建模草稿
 
 ## 流水线义务落点
 
@@ -70,3 +80,5 @@ M7 不进批次流水线：影响评估按请求现算，只读已落库结论�
   不解析下游 SQL 文本本身，也不做多跳血缘。
 - 迁移顺序只排本模块派生的变更（加约束、清洗、改类型、改列名），不含数据回填与
   双写切换这类工程动作。
+- 契约裁定只处理主外键关系，不含列级类型契约的逐条裁定；裁定包不对外发送，
+  只落库与导出 CSV/JSON。

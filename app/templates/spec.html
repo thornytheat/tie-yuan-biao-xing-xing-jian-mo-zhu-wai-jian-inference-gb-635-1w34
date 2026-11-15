@@ -60,7 +60,7 @@
     <table class="spec dense">
       <caption>{{ document.key_rows | length }} 条键结论 · {{ document.objects | length }} 个对象</caption>
       <thead>
-        <tr><th>类</th><th>子表</th><th>子列</th><th>父表</th><th>来源</th><th>状态</th><th class="num">包含度</th><th>依据</th></tr>
+        <tr><th>类</th><th>子表</th><th>子列</th><th>父表</th><th>来源</th><th>状态</th><th>已发布裁定</th><th class="num">包含度</th><th>依据</th></tr>
       </thead>
       <tbody>
         {% for row in document.key_rows %}
@@ -71,6 +71,7 @@
           <td class="mono">{{ row.parent_table }}</td>
           <td class="nowrap">{{ row.declared }}</td>
           <td class="nowrap">{{ row.status_label }}</td>
+          <td class="nowrap">{{ row.contract or '—' }}</td>
           <td class="num">{{ row.inclusion | rate }}</td>
           <td class="mono">{{ row.note }}</td>
         </tr>
@@ -121,6 +122,76 @@
   </div>
 </section>
 {% endif %}
+
+<section class="section">
+  <h2>丁之二 已发布契约与建模草稿</h2>
+  {% if document.contract and document.contract.publication %}
+  <p class="hint">
+    已发布版本 v{{ document.contract.publication.version_no }}
+    （{{ document.contract.publication.publication_id }}，裁定包摘要
+    {{ document.contract.publication.package_digest[:16] }}）。
+    声明契约是建表声明，不因样本缺值而删除；建模草稿只收逐条裁定为采纳的关系。
+    另有 {{ document.contract.pending }} 条仍待裁定，未进入任何发布版本。
+  </p>
+  <div class="totalbar">
+    <span>声明契约 <b>{{ document.contract.declared_contract | length }}</b></span>
+    <span>建模草稿 <b>{{ document.contract.draft | length }}</b></span>
+    <span>驳回 <b>{{ document.contract.rejected | length }}</b></span>
+    <span>挂起 <b>{{ document.contract.deferred | length }}</b></span>
+    <span>待裁定 <b>{{ document.contract.pending }}</b></span>
+  </div>
+  <div class="wide">
+    <table class="spec dense">
+      <caption>声明契约：DDL 声明的关系，按裁定结果标注是否进入草稿</caption>
+      <thead>
+        <tr><th>子表</th><th>子列</th><th>父表</th><th>父列</th><th>冲突形态</th><th>裁定</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        {% for row in document.contract.declared_contract %}
+        <tr>
+          <td class="mono">{{ row.child_table }}</td>
+          <td class="mono">{{ row.child_columns | join('、') }}</td>
+          <td class="mono">{{ row.parent_table }}</td>
+          <td class="mono">{{ row.parent_columns | join('、') }}</td>
+          <td>{{ row.conflict_type | conflict }}</td>
+          <td>{{ row.decision | decision }}</td>
+          <td class="mono">{{ row.decision_note or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">本轮没有声明关系。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="wide">
+    <table class="spec dense">
+      <caption>建模草稿：只含裁定为采纳的关系（声明关系与样本证实的新关系）</caption>
+      <thead>
+        <tr><th>子表</th><th>子列</th><th>父表</th><th>父列</th><th>冲突形态</th><th>依据</th></tr>
+      </thead>
+      <tbody>
+        {% for row in document.contract.draft %}
+        <tr>
+          <td class="mono">{{ row.child_table }}</td>
+          <td class="mono">{{ row.child_columns | join('、') }}</td>
+          <td class="mono">{{ row.parent_table }}</td>
+          <td class="mono">{{ row.parent_columns | join('、') }}</td>
+          <td>{{ row.conflict_type | conflict }}</td>
+          <td class="mono">
+            {% if row.basis.ddl %}声明 {{ row.basis.ddl.inclusion or '—' }}{% endif %}
+            {% if row.basis.sample %}样本 {{ row.basis.sample.inclusion or '—' }}{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">还没有采纳的关系。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">还没有发布版本；到「契约裁定」页逐条裁定后整版发布。</p>
+  {% endif %}
+</section>
 
 <section class="section">
   <h2>戊 注</h2>

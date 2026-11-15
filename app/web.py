@@ -24,6 +24,7 @@ NAV = (
     ("/star", "星型建议", "star"),
     ("/impact", "影响评估", "impact"),
     ("/batches", "版本历史", "batches"),
+    ("/review", "契约裁定", "review"),
     ("/spec", "规格单", "spec"),
 )
 
@@ -109,6 +110,10 @@ def setup(app) -> None:
     env.filters["role"] = lambda key: config.ROLE_LABELS.get(key, key or "—")
     env.filters["scd"] = lambda key: config.SCD_LABELS.get(key, key or "—")
     env.filters["status"] = lambda key: STATUS_LABELS.get(key, key or "—")
+    env.filters["decision"] = lambda key: config.REVIEW_DECISION_LABELS.get(
+        key, key or "—")
+    env.filters["conflict"] = lambda key: config.REVIEW_CONFLICT_LABELS.get(
+        key, key or "—")
     env.globals.update(
         nav=NAV,
         stage_labels=config.STAGE_LABELS,
@@ -118,6 +123,9 @@ def setup(app) -> None:
         disposition_labels=config.DISPOSITION_LABELS,
         role_labels=config.ROLE_LABELS,
         scd_labels=config.SCD_LABELS,
+        review_decision_labels=config.REVIEW_DECISION_LABELS,
+        review_conflict_labels=config.REVIEW_CONFLICT_LABELS,
+        review_status_labels=config.REVIEW_STATUS_LABELS,
         rule_version=config.RULE_VERSION,
         money_unit="元",
         qty_unit="件",
